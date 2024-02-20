@@ -7,4 +7,4 @@ long_description: KNIME nodes for reading/writing Smartsheet data.
 version: 0.2.0
 license_file: LICENSE.TXT
 extension_module: src/smartsheet_ext
-env_yml_path: src/smartsheet_env.yml
+env_yml_path: smartsheet_env.yml
