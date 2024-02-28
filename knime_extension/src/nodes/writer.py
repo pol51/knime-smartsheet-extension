@@ -72,21 +72,7 @@ class SmartsheetWriterNode(knext.PythonNode):
 
     def configure(self, configure_context: knext.ConfigurationContext, input):
         if not self.access_token:
-            try:
-                credentials = configure_context.get_credentials(TOKEN_NAME)
-                if credentials.password == "":
-                    raise KeyError
-                self.access_token = credentials.password
-                LOGGER.debug(
-                    f"{TOKEN_NAME} has been set via credentials coming in as flow variable."
-                )
-            except KeyError:
-                raise knext.InvalidParametersError(
-                    f"Either {TOKEN_NAME} was not set in your env or \
-the Credentials Configuration node (which should \
-set the flow variable for this node) did not contain \
-a parameter called {TOKEN_NAME} or the password in there was empty."
-                )
+            _get_access_token_from_credentials_configuration(configure_context)
         return None
 
     @classmethod
@@ -106,6 +92,10 @@ a parameter called {TOKEN_NAME} or the password in there was empty."
             return str(pd_value)
 
     def execute(self, exec_context: knext.ExecutionContext, input):
+        if not self.access_token:
+            self.access_token = _get_access_token_from_credentials_configuration(
+                exec_context
+            )
         input_pandas: pd.PeriodDtype = input.to_pandas()
 
         smart: smartsheet.Smartsheet = smartsheet.Smartsheet(self.access_token)
@@ -237,3 +227,23 @@ a parameter called {TOKEN_NAME} or the password in there was empty."
             LOGGER.info("- {} new rows CREATED".format(len(new_rows)))
 
         return None
+
+
+def _get_access_token_from_credentials_configuration(
+    context: knext.ConfigurationContext,
+):
+    try:
+        credentials = context.get_credentials(TOKEN_NAME)
+        if credentials.password == "":
+            raise KeyError
+        LOGGER.debug(
+            f"{TOKEN_NAME} has been set via credentials coming in as flow variable."
+        )
+        return credentials.password
+    except KeyError:
+        raise knext.InvalidParametersError(
+            f"Either {TOKEN_NAME} was not set in your env or \
+the Credentials Configuration node (which should \
+set the flow variable for this node) did not contain \
+a parameter called {TOKEN_NAME} or the password in there was empty."
+        )

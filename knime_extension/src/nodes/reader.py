@@ -61,24 +61,14 @@ class SmartsheetReaderNode(knext.PythonNode):
 
     def configure(self, configure_context: knext.ConfigurationContext):
         if not self.access_token:
-            try:
-                credentials = configure_context.get_credentials(TOKEN_NAME)
-                if credentials.password == "":
-                    raise KeyError
-                self.access_token = credentials.password
-                LOGGER.debug(
-                    f"{TOKEN_NAME} has been set via credentials coming in as flow variable."
-                )
-            except KeyError:
-                raise knext.InvalidParametersError(
-                    f"Either {TOKEN_NAME} was not set in your env or \
-the Credentials Configuration node (which should \
-set the flow variable for this node) did not contain \
-a parameter called {TOKEN_NAME} or the password in there was empty."
-                )
+            _get_access_token_from_credentials_configuration(configure_context)
         return None
 
     def execute(self, exec_context: knext.ExecutionContext):
+        if not self.access_token:
+            self.access_token = _get_access_token_from_credentials_configuration(
+                exec_context
+            )
         smart = smartsheet.Smartsheet(access_token=self.access_token)
 
         page_size = 1
@@ -134,3 +124,23 @@ a parameter called {TOKEN_NAME} or the password in there was empty."
             df_sheets.columns = ["Sheet ID", "Sheet Name"]
 
         return knext.Table.from_pandas(df), knext.Table.from_pandas(df_sheets)
+
+
+def _get_access_token_from_credentials_configuration(
+    context: knext.ConfigurationContext,
+):
+    try:
+        credentials = context.get_credentials(TOKEN_NAME)
+        if credentials.password == "":
+            raise KeyError
+        LOGGER.debug(
+            f"{TOKEN_NAME} has been set via credentials coming in as flow variable."
+        )
+        return credentials.password
+    except KeyError:
+        raise knext.InvalidParametersError(
+            f"Either {TOKEN_NAME} was not set in your env or \
+the Credentials Configuration node (which should \
+set the flow variable for this node) did not contain \
+a parameter called {TOKEN_NAME} or the password in there was empty."
+        )
