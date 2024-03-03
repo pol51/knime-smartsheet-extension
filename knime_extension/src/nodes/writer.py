@@ -105,7 +105,10 @@ class SmartsheetWriterNode(knext.PythonNode):
 
         if self.clearFirst:
             LOGGER.info("deleting all existing rows...")
-            smart.Sheets.delete_rows(self.sheetId, [r.id for r in sheet.rows])
+            page_size = 300
+            row_ids: List[RowId] = [r.id for r in sheet.rows]
+            for ids in [row_ids[i:i+page_size] for i in range(0, len(row_ids), page_size)]:
+                smart.Sheets.delete_rows(self.sheetId, ids)
             sheet = smart.Sheets.get_sheet(self.sheetId)
 
         input_columns: List[ColumnTitle] = [c for c in input_pandas]
