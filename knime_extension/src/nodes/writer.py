@@ -1,21 +1,22 @@
 import os
 import logging
 
-import knime_extension as knext
+import knime.extension as knext
 import pandas as pd
 import smartsheet
 from collections.abc import Callable
 from typing import Dict, List, NewType
 
-RowId = NewType("RowId", int)
-ColumnId = NewType("ColumnId", int)
-ColumnType = NewType("ColumnType", str)
-ColumnTitle = NewType("ColumnTitle", str)
-SyncRef = NewType("SyncRef", str)
+RowId: NewType = NewType("RowId", int)
+ColumnId: NewType = NewType("ColumnId", int)
+ColumnType: NewType = NewType("ColumnType", str)
+ColumnTitle: NewType = NewType("ColumnTitle", str)
+SyncRef: NewType = NewType("SyncRef", str)
 
 LOGGER = logging.getLogger(__name__)
 
 TOKEN_NAME = "SMARTSHEET_ACCESS_TOKEN"
+REGION_NAME = "SMARTSHEET_REGION"
 
 
 @knext.node(
@@ -28,12 +29,58 @@ TOKEN_NAME = "SMARTSHEET_ACCESS_TOKEN"
 class SmartsheetWriterNode(knext.PythonNode):
     """Smartsheet Writer Node
 
-    Writes Smartsheet sheet.
+    This node writes the input data into a Smartsheet grid which can then be used by other Smartsheet applications,
+    dashboards and potentially access all other features in Smartsheet.
+    Data can be appended to a blank sheet or synchronized with a populated sheet.
+    Synchronization is based on the Reference (Index) column in the Writer node.
 
-    The SMARTSHEET_ACCESS_TOKEN can be set via the environment. If that is not
-    set, you can set it via credentials from the flow variables, which can be
-    set e.g. via Credentials Configuration, where the parameter name must be
-    SMARTSHEET_ACCESS_TOKEN and the token must be in the password field.
+    It allows you to connect any external data source to Smartsheet, calculate complex KPIs within KNIME and much more.
+    It also allows you to read from Smartsheet using the Smartsheet Reader node,
+    process data and prepare KPIs and dashboards.
+
+    The node can upload a new dataset on an empty Smartsheet grid. To do so, check the *"Clear sheet first"* option.
+
+    # To set up the Smartsheet Writer Node, follow these steps:
+
+    1. **Specify the Sheet ID:** Enter the target Smartsheet ID in the *"Sheet"* field.
+
+        To find the Target Smartsheet ID in Smartsheet, you can:
+
+        - Right-click on the sheet name and select *"Properties."*
+        - Alternatively, go to *"File"* -> *"Properties"* within the sheet.
+        - Copy the Sheet ID.
+
+    2. **Define the Reference Column:** Enter the column name that contains the unique key for synchronization in the
+     *"Ref column"* field.
+    Note that this column is case-sensitive.
+
+    3. **Optional: Clear Existing Data:** Check *"Clear sheet first"* if you want to empty the Smartsheet completely
+     before uploading the new dataset. Caution: This will permanently delete the original data in the Smartsheet.
+
+    4. **Optional: Append New Rows:** Check *"Add new"* (append) if you wish to add new rows in case their
+     *"Ref Column"* content does not exist in the target Smartsheet.
+
+    5. **Configure Credentials:**
+        - **Via Knime *"Credentials Configuration"* node:**
+            - Add the *"Credentials Configuration"* node to your workflow.
+            - Connect the variable port of the *"Credentials Configuration"* node to the upper left variable port of
+             the Smartsheet Writer node.
+            - In the *"Credentials Configuration"* node:
+                1. Enter *`"SMARTSHEET_ACCESS_TOKEN"`* in the *"Parameter/Variable Name"* field.
+                2. Enter your Smartsheet access token in the *"Password"* field.
+
+                **Note**: If your Smartsheet token is for European or Government Smartsheet server, you need to prefix
+                your Smartsheet token with the region (*`eu`*, *`gov`*). (eg: *"eu:<SMARTSHEET_ACCESS_TOKEN>"*)
+
+        - **Alternatively, using environment variables:**
+            - Set your Smartsheet access token in *`"SMARTSHEET_ACCESS_TOKEN"`* env variable.
+            - Optional: Set your Smartsheet region (*`eu`*, *`gov`*) in *`"SMARTSHEET_REGION"`* env variable.
+
+        **Note**: If the region is unspecified, it will use by default US Smartsheet services (smartsheet.com)
+
+
+    **Important Note**: Synchronization requires unique values in the *"Ref Column"* of both the dataset to be imported
+     and the target Smartsheet. Presence of duplicate values in either will result in an error.
 
     """
 
@@ -56,7 +103,8 @@ class SmartsheetWriterNode(knext.PythonNode):
     removeOldRefs = False
 
     def __init__(self):
-        self.access_token = os.environ.get("SMARTSHEET_ACCESS_TOKEN", "")
+        self.access_token = os.environ.get(TOKEN_NAME, "")
+        self.access_region = os.environ.get(REGION_NAME, "")
 
         column_filter: Callable[[knext.Column], bool] = None
 
@@ -70,9 +118,10 @@ class SmartsheetWriterNode(knext.PythonNode):
             since_version=None,
         )
 
-    def configure(self, configure_context: knext.ConfigurationContext, input):
+    def configure(self, configure_context: knext.ConfigurationContext, *input):
         if not self.access_token:
             _get_access_token_from_credentials_configuration(configure_context)
+
         return None
 
     @classmethod
@@ -91,14 +140,28 @@ class SmartsheetWriterNode(knext.PythonNode):
         except Exception as _e:
             return str(pd_value)
 
-    def execute(self, exec_context: knext.ExecutionContext, input):
+    def execute(self, exec_context: knext.ExecutionContext, *input):
         if not self.access_token:
             self.access_token = _get_access_token_from_credentials_configuration(
                 exec_context
             )
-        input_pandas: pd.PeriodDtype = input.to_pandas()
 
-        smart: smartsheet.Smartsheet = smartsheet.Smartsheet(self.access_token)
+            token_parts = self.access_token.split(":")
+            if len(token_parts) == 2:
+                self.access_region, self.access_token = token_parts
+
+        if self.access_region == "eu":
+            api_base = smartsheet.__eu_base__
+        elif self.access_region == "gov":
+            api_base = smartsheet.__gov_base__
+        else:
+            api_base = smartsheet.__api_base__
+
+        input_pandas: pd.PeriodDtype = input[0].to_pandas()
+
+        smart: smartsheet.Smartsheet = smartsheet.Smartsheet(
+            self.access_token, api_base=api_base
+        )
         sheet = smart.Sheets.get_sheet(self.sheetId)
         if not sheet:
             raise knext.InvalidParametersError("Output sheet not found in Smartsheet")
@@ -107,7 +170,9 @@ class SmartsheetWriterNode(knext.PythonNode):
             LOGGER.info("deleting all existing rows...")
             page_size = 300
             row_ids: List[RowId] = [r.id for r in sheet.rows]
-            for ids in [row_ids[i:i+page_size] for i in range(0, len(row_ids), page_size)]:
+            for ids in [
+                row_ids[i : i + page_size] for i in range(0, len(row_ids), page_size)
+            ]:
                 smart.Sheets.delete_rows(self.sheetId, ids)
             sheet = smart.Sheets.get_sheet(self.sheetId)
 

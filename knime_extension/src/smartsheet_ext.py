@@ -1,4 +1,4 @@
-import knime_extension as knext
+import knime.extension as knext
 
 category = knext.category(
     path="/community",

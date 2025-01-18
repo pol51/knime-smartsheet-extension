@@ -2,13 +2,14 @@ import os
 import logging
 
 import pandas as pd
-import knime_extension as knext
+import knime.extension as knext
 import smartsheet
 from collections.abc import Callable
 
 LOGGER = logging.getLogger(__name__)
 
 TOKEN_NAME = "SMARTSHEET_ACCESS_TOKEN"
+REGION_NAME = "SMARTSHEET_REGION"
 
 
 @knext.node(
@@ -25,12 +26,42 @@ TOKEN_NAME = "SMARTSHEET_ACCESS_TOKEN"
 class SmartsheetReaderNode(knext.PythonNode):
     """Smartsheet Reader Node
 
-    Reads Smartsheet sheet.
+    This node downloads data from Smartsheet for further processing and analysis within KNIME.
+    It allows you to integrate Smartsheet data with other data sources, calculate KPIs, and visualize results in
+     various ways, including writing data back to Smartsheet using the Smartsheet Writer node.
 
-    The SMARTSHEET_ACCESS_TOKEN can be set via the environment. If that is not
-    set, you can set it via credentials from the flow variables, which can be
-    set e.g. via Credentials Configuration, where the parameter name must be
-    SMARTSHEET_ACCESS_TOKEN and the token must be in the password field.
+    # To set up the Smartsheet Reader Node, follow these steps:
+
+    1. **Specify the ID:**  Enter the Smartsheet Sheet ID or Report ID in the *"ID"* field.
+
+        To find the ID in Smartsheet:
+
+        - Right-click on the sheet or report name and select *"Properties."*
+        - Alternatively, go to *"File"* -> *"Properties"* within the sheet or report.
+        - Copy the Sheet ID or Report ID.
+
+    2. **Indicate Report (Optional):**
+        Check the *"Report"* checkbox if you are reading data from a Smartsheet report.
+
+    3. **Configure Credentials:**
+        - **Via Knime *"Credentials Configuration"* node:**
+
+            - Add the *"Credentials Configuration"* node to your workflow.
+            - Connect the variable port of the *"Credentials Configuration"* node to the upper left variable port of
+             the Smartsheet Writer node.
+            - In the *"Credentials Configuration"* node:
+
+                1. Enter *`"SMARTSHEET_ACCESS_TOKEN"`* in the *"Parameter/Variable Name"* field.
+                2. Enter your Smartsheet access token in the *"Password"* field.
+
+                **Note**: If your Smartsheet token is for European or Government Smartsheet server, you need to prefix
+                your Smartsheet token with the region (*`eu`*, *`gov`*). (eg: *"eu:<SMARTSHEET_ACCESS_TOKEN>"*)
+
+        - **Alternatively, using environment variables:**
+            - Set your Smartsheet access token in *`"SMARTSHEET_ACCESS_TOKEN"`* env variable.
+            - Optional: Set your Smartsheet region (*`eu`*, *`gov`*) in *`"SMARTSHEET_REGION"`* env variable.
+
+        **Note**: if the region is unspecified, it will use by default US Smartsheet services (smartsheet.com)
     """
 
     sheetId = knext.StringParameter(
@@ -46,6 +77,7 @@ class SmartsheetReaderNode(knext.PythonNode):
 
     def __init__(self):
         self.access_token = os.environ.get(TOKEN_NAME, "")
+        self.access_region = os.environ.get(REGION_NAME, "")
 
         column_filter: Callable[[knext.Column], bool] = None
 
@@ -59,17 +91,29 @@ class SmartsheetReaderNode(knext.PythonNode):
             since_version=None,
         )
 
-    def configure(self, configure_context: knext.ConfigurationContext):
+    def configure(self, configure_context: knext.ConfigurationContext, *input):
         if not self.access_token:
             _get_access_token_from_credentials_configuration(configure_context)
         return None
 
-    def execute(self, exec_context: knext.ExecutionContext):
+    def execute(self, exec_context: knext.ExecutionContext, *input):
         if not self.access_token:
             self.access_token = _get_access_token_from_credentials_configuration(
                 exec_context
             )
-        smart = smartsheet.Smartsheet(access_token=self.access_token)
+
+            token_parts = self.access_token.split(":")
+            if len(token_parts) == 2:
+                self.access_region, self.access_token = token_parts
+
+        if self.access_region == "eu":
+            api_base = smartsheet.__eu_base__
+        elif self.access_region == "gov":
+            api_base = smartsheet.__gov_base__
+        else:
+            api_base = smartsheet.__api_base__
+
+        smart = smartsheet.Smartsheet(access_token=self.access_token, api_base=api_base)
 
         page_size = 1
 
