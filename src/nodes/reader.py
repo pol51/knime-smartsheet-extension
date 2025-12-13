@@ -152,6 +152,7 @@ class SmartsheetReaderNode(knext.PythonNode):
         for t in [c.title for c in sheet.columns]:
             try:
                 df.astype({t: "float"})
+                df[t] = pd.to_numeric(df[t], errors="coerce")
             except Exception as _:
                 try:
                     df.astype({t: "int64"})
