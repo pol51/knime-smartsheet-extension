@@ -162,19 +162,32 @@ class SmartsheetWriterNode(knext.PythonNode):
         smart: smartsheet.Smartsheet = smartsheet.Smartsheet(
             self.access_token, api_base=api_base
         )
-        sheet = smart.Sheets.get_sheet(self.sheetId)
+        sheet = smart.Sheets.get_sheet(self.sheetId, page_size=1, page=1)
         if not sheet:
             raise knext.InvalidParametersError("Output sheet not found in Smartsheet")
 
+        all_rows = []
+        total_row_count = sheet.total_row_count or 0
+        if total_row_count > 0:
+            page_size = 1000
+            num_pages = (total_row_count - 1) // page_size + 1
+            for page_num in range(1, num_pages + 1):
+                page_sheet = smart.Sheets.get_sheet(
+                    self.sheetId, page_size=page_size, page=page_num
+                )
+                all_rows.extend(page_sheet.rows)
+
+        batch_size = 300
         if self.clearFirst:
             LOGGER.info("deleting all existing rows...")
-            page_size = 300
-            row_ids: List[RowId] = [r.id for r in sheet.rows]
+            row_ids: List[RowId] = [r.id for r in all_rows]
             for ids in [
-                row_ids[i : i + page_size] for i in range(0, len(row_ids), page_size)
+                row_ids[i : i + batch_size]
+                for i in range(0, len(row_ids), batch_size)
             ]:
                 smart.Sheets.delete_rows(self.sheetId, ids)
             sheet = smart.Sheets.get_sheet(self.sheetId)
+            all_rows = []
 
         input_columns: List[ColumnTitle] = [c for c in input_pandas]
         output_columns: Dict[ColumnTitle, ColumnId] = {
@@ -207,7 +220,7 @@ class SmartsheetWriterNode(knext.PythonNode):
         output_ref_to_be_synced: Dict[SyncRef, RowId] = dict()
         output_data_to_be_synced: Dict[RowId, smartsheet.models.Row] = dict()
         output_ref_missing: List[SyncRef] = list()
-        for row in sheet.rows:
+        for row in all_rows:
             for cell in [c for c in row.cells if c.value is not None]:
                 if cell.column_id == ref_column_id:
                     if cell.value in input_references:
@@ -261,7 +274,10 @@ class SmartsheetWriterNode(knext.PythonNode):
             # add row to the list
             updated_rows.append(updated_row)
         if len(updated_rows) > 0:
-            smart.Sheets.update_rows(self.sheetId, updated_rows)
+            for i in range(0, len(updated_rows), batch_size):
+                smart.Sheets.update_rows(
+                    self.sheetId, updated_rows[i : i + batch_size]
+                )
         LOGGER.info("- {} matching rows UPDATED".format(len(updated_rows)))
 
         # add new rows
@@ -291,7 +307,10 @@ class SmartsheetWriterNode(knext.PythonNode):
                 new_rows.append(new_row)
 
             if len(new_rows) > 0:
-                smart.Sheets.add_rows(self.sheetId, new_rows)
+                for i in range(0, len(new_rows), batch_size):
+                    smart.Sheets.add_rows(
+                        self.sheetId, new_rows[i : i + batch_size]
+                    )
             LOGGER.info("- {} new rows CREATED".format(len(new_rows)))
 
         return None
