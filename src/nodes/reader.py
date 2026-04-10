@@ -135,20 +135,26 @@ class SmartsheetReaderNode(knext.PythonNode):
 
         dfs = list()
 
-        total_row_count = sheet.total_row_count
+        total_row_count = sheet.total_row_count or 0
         LOGGER.info("- {} rows to be read".format(total_row_count))
-        for current_page in [
-            x + 1 for x in range(0, int((total_row_count - 1) / page_size) + 1)
-        ]:
-            sheet = get_page(current_page)
-            dfs.append(
-                pd.DataFrame(
-                    [[c.value for c in r.cells] for r in sheet.rows], dtype="object"
-                )
-            )
 
-        df = pd.concat(dfs, ignore_index=True)
-        df.columns = [c.title for c in sheet.columns]
+        column_names = [c.title for c in sheet.columns]
+
+        if total_row_count == 0:
+            df = pd.DataFrame(columns=column_names)
+        else:
+            for current_page in [
+                x + 1 for x in range(0, int((total_row_count - 1) / page_size) + 1)
+            ]:
+                sheet = get_page(current_page)
+                dfs.append(
+                    pd.DataFrame(
+                        [[c.value for c in r.cells] for r in sheet.rows], dtype="object"
+                    )
+                )
+
+            df = pd.concat(dfs, ignore_index=True)
+            df.columns = column_names
         for t in [c.title for c in sheet.columns]:
             try:
                 df.astype({t: "float"})
