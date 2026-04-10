@@ -1,11 +1,11 @@
-import os
 import logging
 
 import knime.extension as knext
 import pandas as pd
 import smartsheet
-from collections.abc import Callable
 from typing import Dict, List, NewType
+
+from nodes.smartsheet_client import resolve_token_and_region, create_client, validate_credentials
 
 RowId: NewType = NewType("RowId", int)
 ColumnId: NewType = NewType("ColumnId", int)
@@ -14,9 +14,6 @@ ColumnTitle: NewType = NewType("ColumnTitle", str)
 SyncRef: NewType = NewType("SyncRef", str)
 
 LOGGER = logging.getLogger(__name__)
-
-TOKEN_NAME = "SMARTSHEET_ACCESS_TOKEN"
-REGION_NAME = "SMARTSHEET_REGION"
 
 
 @knext.node(
@@ -103,25 +100,10 @@ class SmartsheetWriterNode(knext.PythonNode):
     removeOldRefs = False
 
     def __init__(self):
-        self.access_token = os.environ.get(TOKEN_NAME, "")
-        self.access_region = os.environ.get(REGION_NAME, "")
-
-        column_filter: Callable[[knext.Column], bool] = None
-
-        column = knext.ColumnParameter(
-            label="Column",
-            description=None,
-            port_index=0,  # the port from which to source the input table
-            column_filter=column_filter,  # a (lambda) function to filter columns
-            include_row_key=False,  # whether to include the table Row ID column in the list of selectable columns
-            include_none_column=False,  # whether to enable None as a selectable option, which returns "<none>"
-            since_version=None,
-        )
+        self.access_token, self.access_region = resolve_token_and_region()
 
     def configure(self, configure_context: knext.ConfigurationContext, *input):
-        if not self.access_token:
-            _get_access_token_from_credentials_configuration(configure_context)
-
+        validate_credentials(configure_context, self.access_token)
         return None
 
     @classmethod
@@ -141,27 +123,11 @@ class SmartsheetWriterNode(knext.PythonNode):
             return str(pd_value)
 
     def execute(self, exec_context: knext.ExecutionContext, *input):
-        if not self.access_token:
-            self.access_token = _get_access_token_from_credentials_configuration(
-                exec_context
-            )
-
-            token_parts = self.access_token.split(":")
-            if len(token_parts) == 2:
-                self.access_region, self.access_token = token_parts
-
-        if self.access_region == "eu":
-            api_base = smartsheet.__eu_base__
-        elif self.access_region == "gov":
-            api_base = smartsheet.__gov_base__
-        else:
-            api_base = smartsheet.__api_base__
-
-        input_pandas: pd.PeriodDtype = input[0].to_pandas()
-
-        smart: smartsheet.Smartsheet = smartsheet.Smartsheet(
-            self.access_token, api_base=api_base
+        smart, self.access_token, self.access_region = create_client(
+            exec_context, self.access_token, self.access_region
         )
+
+        input_pandas: pd.DataFrame = input[0].to_pandas()
         sheet = smart.Sheets.get_sheet(self.sheetId, page_size=1, page=1)
         if not sheet:
             raise knext.InvalidParametersError("Output sheet not found in Smartsheet")
@@ -314,23 +280,3 @@ class SmartsheetWriterNode(knext.PythonNode):
             LOGGER.info("- {} new rows CREATED".format(len(new_rows)))
 
         return None
-
-
-def _get_access_token_from_credentials_configuration(
-    context: knext.ConfigurationContext,
-):
-    try:
-        credentials = context.get_credentials(TOKEN_NAME)
-        if credentials.password == "":
-            raise KeyError
-        LOGGER.debug(
-            f"{TOKEN_NAME} has been set via credentials coming in as flow variable."
-        )
-        return credentials.password
-    except KeyError:
-        raise knext.InvalidParametersError(
-            f"Either {TOKEN_NAME} was not set in your env or \
-the Credentials Configuration node (which should \
-set the flow variable for this node) did not contain \
-a parameter called {TOKEN_NAME} or the password in there was empty."
-        )
