@@ -1,0 +1,23 @@
+[workspace]
+name = "knime-smartsheet-extension"
+channels = ["knime/label/nightly", "knime", "conda-forge", "plabedan"]
+platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
+
+[tasks]
+
+[dependencies]
+python = "*"
+knime-extension = "*"
+knime-python-base = "*"
+knime-python-versions = "5.12.*"
+smartsheet-python-sdk = "*"
+
+[feature.build.dependencies]
+python = "*"
+knime-extension-bundling = "5.12.*"
+
+[feature.build.tasks]
+build = { args = [{ "arg" = "dest", "default" = "./local-update-site" }], cmd = "build-python-extension . {{ dest }} --update-sites-version nightly" }
+
+[environments]
+build = {features = ["build"], no-default-feature = true}
