@@ -78,6 +78,35 @@ class SmartsheetReaderNode(knext.PythonNode):
         validate_credentials(configure_context, self.access_token)
         return None
 
+    @staticmethod
+    def _coerce_column(series: pd.Series, col_type: str) -> pd.Series:
+        """Cast a column to a pandas dtype using the Smartsheet column type.
+
+        Smartsheet already returns natively typed cell values (numbers as
+        int/float, checkboxes as bool, dates as ISO strings), so we map from the
+        column type rather than guessing by trial-and-error conversion.
+
+        ``TEXT_NUMBER`` is Smartsheet's default type and can hold either text or
+        numbers, so it is the only case we resolve from the values themselves:
+        numeric only when every non-null value is already a real number,
+        otherwise string (this keeps all-digit text like IDs or zip codes intact).
+        """
+        if col_type == "CHECKBOX":
+            return series.astype("boolean")
+        if col_type in ("DATE", "DATETIME", "ABSTRACT_DATETIME"):
+            return pd.to_datetime(series, errors="coerce")
+        if col_type == "TEXT_NUMBER":
+            values = series.dropna()
+            all_numeric = len(values) > 0 and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool)
+                for v in values
+            )
+            if all_numeric:
+                return pd.to_numeric(series, errors="coerce")
+            return series.astype("string")
+        # DURATION, CONTACT_LIST, PICKLIST, PREDECESSOR, MULTI_* — display text.
+        return series.astype("string")
+
     def execute(self, exec_context: knext.ExecutionContext, *input):
         smart, self.access_token, self.access_region = create_client(
             exec_context, self.access_token, self.access_region
@@ -107,6 +136,7 @@ class SmartsheetReaderNode(knext.PythonNode):
         LOGGER.info("- {} rows to be read".format(total_row_count))
 
         column_names = [c.title for c in sheet.columns]
+        column_types = [str(c.type) for c in sheet.columns]
 
         if total_row_count == 0:
             df = pd.DataFrame(columns=column_names)
@@ -123,18 +153,9 @@ class SmartsheetReaderNode(knext.PythonNode):
 
             df = pd.concat(dfs, ignore_index=True)
             df.columns = column_names
-        for t in [c.title for c in sheet.columns]:
-            try:
-                df.astype({t: "float"})
-                df[t] = pd.to_numeric(df[t], errors="coerce")
-            except Exception as _:
-                try:
-                    df.astype({t: "int64"})
-                except Exception as _:
-                    try:
-                        df = df.astype({t: "string"})
-                    except Exception as _:
-                        pass
+
+        for name, col_type in zip(column_names, column_types):
+            df[name] = self._coerce_column(df[name], col_type)
 
         if not self.sheetIsReport:
             df_sheets = pd.DataFrame([])
